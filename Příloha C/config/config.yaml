@@ -1,0 +1,124 @@
+# ============================================================
+# DIPLOMOVÁ PRÁCE: Návrh systému pro autonomně bezkolizní řízení UAV
+# Příloha C
+# Autor: rtm. Richard Línek
+# Fyzická platforma (sim-to-real přenos)
+#
+# Konfigurační soubor projektu STC Drone Nav
+# Hardware:
+#   - Jetson Nano (JetPack 4.6 / Ubuntu 18.04, ARM A57, 4 GB RAM)
+#   - Velodyne VLP-16 LiDAR (Ethernet)
+#   - Pixhawk (PX4, UART /dev/ttyTHS1)
+# ============================================================
+
+# ============================================================
+# MASKA UAV – CropBox filtr (pcl::CropBox)
+# Odstraní body patřící fyzické konstrukci UAV.
+# Souřadnice jsou relativní k LiDAR frame (střed = [0,0,0]).
+# ============================================================
+lidar_mask:
+  enabled: true
+  # Rám + ramena (pohled shora ~700×700 mm)
+  min_x: -0.50    # [m] zadní okraj rámu
+  max_x:  0.50    # [m] přední okraj rámu
+  min_y: -0.50    # [m] levý okraj rámu
+  max_y:  0.50    # [m] pravý okraj rámu
+  # Výška: přistávací nohy (dole) až deska (nahoře)
+  min_z: -0.30    # [m] spodní okraj přistávacích noh
+  max_z:  0.20    # [m] horní okraj desky / LiDAR bracketů
+
+# ============================================================
+# VÝŠKOVÝ FILTR PROSTŘEDÍ
+# Odfiltruje body mimo relevantní výškové pásmo
+# ============================================================
+height_filter:
+  enabled: true
+  min_z: -0.3     # [m] pod UAV (relativně k aktuální výšce)
+  max_z:  4.0     # [m] nad UAV
+
+# ============================================================
+# ICP ODOMETRIE (frame-to-keyframe SLAM bez uzavření smyčky)
+# Využívá PCL::IterativeClosestPoint pro odhad polohy
+# ============================================================
+slam:
+  # Downsample: redukce mračna bodů před ICP
+  voxel_leaf_size: 0.15           # [m] velikost voxelu
+  # Parametry ICP
+  icp_max_iterations: 30
+  icp_max_correspondence_dist: 0.5  # [m] maximální vzdálenost korespondence
+  icp_transformation_eps: 1.0e-6    # konvergenční práh transformace
+  icp_euclidean_fitness_eps: 0.01   # konvergenční práh chyby
+  icp_fitness_threshold: 0.25       # maximální průměrná chyba pro přijetí ICP
+  # Keyframe strategie
+  keyframe_min_dist_m: 0.3          # [m] minimální pohyb pro nový keyframe
+  keyframe_min_angle_rad: 0.087     # [rad] minimální rotace (~5°) pro nový keyframe
+  # Počáteční poloha UAV v mapě [x, y, z, yaw_rad]
+  initial_pose: [0.0, 0.0, 0.0, 0.0]
+
+# ============================================================
+# MAVLINK BRIDGE – MAVSDK
+# Připojení k Pixhawku přes sériový port UART
+# Jetson Nano UART: /dev/ttyTHS1 (J41 header, piny 8 a 10)
+# ============================================================
+mavlink:
+  connection_url: "serial:///dev/ttyACM0:921600"
+  # Alternativně přes UDP (simulace / SITL):
+  # connection_url: "udp://:14540"
+  takeoff_altitude_m: 3.0          # [m] výška vzletu
+  waypoint_acceptance_radius_m: 0.5  # [m] poloměr přijetí waypointu
+  max_horizontal_speed_ms: 2.0     # [m/s] maximální rychlost v horizontu
+  max_vertical_speed_ms: 1.0       # [m/s] maximální vertikální rychlost
+  yaw_deg: 0.0                     # [°] výchozí yaw (NaN = zachovat)
+  connection_timeout_s: 10.0       # [s] timeout čekání na heartbeat
+
+# ============================================================
+# WATCHDOG (bezpečnostní mechanismus)
+# Při výpadku LiDAR dat nebo SLAM odometrie přejde UAV
+# do LOITER nebo LAND dle konfigurace
+# ============================================================
+watchdog:
+  lidar_timeout_ms: 500            # [ms] maximální prodleva LiDAR dat
+  slam_timeout_ms: 500             # [ms] maximální prodleva SLAM polohy
+  # Akce při výpadku: "LOITER" (udržení pozice) nebo "LAND"
+  action_on_loss: "LOITER"
+  # Po uplynutí LOITER timeoutu bez obnovy dat přejít na LAND
+  loiter_to_land_timeout_ms: 5000
+
+# ============================================================
+# THETA* PLÁNOVAČ (3D mřížka)
+# ============================================================
+planner:
+  map_resolution_m: 0.25           # [m/buňku]
+  map_size_x_cells: 80             # buněk v ose X (→ 20 m)
+  map_size_y_cells: 80             # buněk v ose Y (→ 20 m)
+  map_size_z_cells: 20             # buněk v ose Z (→ 5 m)
+  inflation_radius_cells: 2        # bezpečnostní okraj (buňky)
+  replan_interval_ms: 500          # perioda přeplánování
+  expansion_limit: 100000          # maximální počet uzlů Theta* prohledávání
+  wp_tolerance_m: 0.5              # tolerance dosažení waypointu
+
+# ============================================================
+# TRANSFORMACE SOUŘADNIC (LiDAR → BODY NED frame)
+# Parametry odpovídají fyzickému umístění LiDARu na UAV
+# ============================================================
+tf:
+  # Posunutí LiDARu od těžiště UAV [x_fwd, y_right, z_down] v metrech
+  lidar_to_body_translation: [0.0, 0.0, -0.15]
+  # Orientace LiDARu [roll, pitch, yaw] v radiánech
+  lidar_to_body_rotation_rpy: [3.14159, 0.0, 0.0]
+
+# ============================================================
+# VELODYNE VLP-16 (připojení přes Ethernet)
+# ============================================================
+velodyne:
+  host_ip: "192.168.1.100"         # IP Jetsonu
+  device_ip: 192.168.1.201         # IP VLP-16 (výchozí)
+  port: 2368                       # UDP port (výchozí VLP-16)
+  rpm: 600                         # otáčky [RPM]: 300/600/900/1200
+
+# ============================================================
+# LETOVÝ CÍL
+# ============================================================
+mission:
+  goal_x: 10.0   # [m] North
+  goal_y: 0.0    # [m] East
